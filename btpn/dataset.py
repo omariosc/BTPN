@@ -694,16 +694,16 @@ def split_7dof_fixed(
     n_val: int | None = None,
     seed: int = 42,
 ) -> tuple[list[Path], list[Path]]:
-    """Split 7DOF2024 trials with validation selected from trials 40-60.
+    """Split 7DOF2024 trials, holding out trials 40-60 for validation.
 
-    This ensures consistent, non-random validation across all training
-    pipelines.  Validation trials are randomly sampled from the eligible pool
-    (trials 40-60); all others go to training.
+    By default every available trial numbered 40-60 is held out; these are
+    the trials the Dataset-A metrics are reported on.
 
     Args:
         trial_dirs: All discovered 7DOF2024 trial directories.
-        n_val: Number of validation trials from pool (default ~15 % of total).
-        seed: Random seed for reproducible selection.
+        n_val: Number of validation trials to sample from the pool. ``None``
+            (default) holds out the whole pool.
+        seed: Random seed, used only when ``n_val`` subsamples the pool.
 
     Returns:
         ``(train_dirs, val_dirs)`` tuple.
@@ -720,7 +720,7 @@ def split_7dof_fixed(
             non_pool_dirs.append(td)
 
     if n_val is None:
-        n_val = max(1, round(len(trial_dirs) * 0.15))
+        n_val = len(pool_dirs)
     n_val = min(n_val, len(pool_dirs))
 
     rng = random.Random(seed)

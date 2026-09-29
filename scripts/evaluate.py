@@ -55,6 +55,7 @@ from btpn.metrics import (
     compute_euler_errors,
     compute_jaw_metrics,
     compute_ece,
+    compute_rotation_ece_vmf,
     compute_ause,
     compute_coverage,
     format_results_table,
@@ -700,6 +701,7 @@ def compute_per_tool_metrics(
     ])
     rot_sigma_proxy = 1.0 / (kappa_all + 1e-8)
     rot_ause = compute_ause(all_rot, rot_sigma_proxy, n_steps=20)
+    rot_ece_vmf = compute_rotation_ece_vmf(np.radians(all_rot), kappa_all)
 
     metrics["uncertainty"] = {
         "ece": ece_result["ece"],
@@ -708,6 +710,8 @@ def compute_per_tool_metrics(
         "ause_rot_normalized": rot_ause["ause_normalized"],
         "mean_sigma_pos_mm": float(sigma_pos_all.mean()),
         "mean_kappa": float(kappa_all.mean()),
+        "rot_ece_vmf": rot_ece_vmf["ece"],
+        "rot_coverages_vmf": rot_ece_vmf["global_coverages"],
         "global_coverages": ece_result["global_coverages"],
         "coverage": coverage_result,
     }
@@ -1458,9 +1462,17 @@ def evaluate_from_npz(
     # present -- the pose/position metrics and the headline position ECE above
     # are always available.
     if "kappa_quaternion" in data:
-        kappas = data["kappa_quaternion"].reshape(-1)
+        # Tool-major order to match all_rot (tool 1 samples, then tool 2).
+        kq = data["kappa_quaternion"]
+        kappas = np.concatenate([kq[:, 0].reshape(-1), kq[:, 1].reshape(-1)])
         rot_sigma_fisher = 1.0 / np.sqrt(np.maximum(kappas, 1.0))
         out["rot_ece_fisher"] = float(compute_ece(np.radians(all_rot), rot_sigma_fisher)["ece"])
+        rot_vmf = compute_rotation_ece_vmf(np.radians(all_rot), kappas)
+        out["rot_ece_vmf"] = rot_vmf["ece"]
+        out["rot_coverage_vmf_683"] = rot_vmf["global_coverages"]["0.683"]
+        out["kappa_p1"], out["kappa_p50"], out["kappa_p99"] = (
+            float(x) for x in np.percentile(kappas, [1, 50, 99])
+        )
     if "sigma_angle" in data:
         out["jaw_ece"] = float(compute_ece(
             np.abs(data["mu_angle"] - data["target_angle"]).reshape(-1),
@@ -1491,8 +1503,11 @@ def evaluate_from_npz(
         print(f"  {label:<22}{rep:>14.{prec}f}{tab:>12.{prec}f}{rep - tab:>+12.{prec}f}")
     print("  " + "-" * 66)
     if "rot_ece_fisher" in out and "jaw_ece" in out:
-        print(f"  rotation ECE (Fisher, physical) = {out['rot_ece_fisher']:.3f} "
-              f"(over-conservative); jaw ECE = {out['jaw_ece']:.3f}")
+        print(f"  rotation ECE (Fisher) = {out['rot_ece_fisher']:.3f}; "
+              f"jaw ECE = {out['jaw_ece']:.3f}")
+        print(f"  rotation ECE (vMF on S^3) = {out['rot_ece_vmf']:.3f}; "
+              f"68.3% region covers {out['rot_coverage_vmf_683']:.3f} of errors; "
+              f"kappa p1/p50/p99 = {out['kappa_p1']:.2f}/{out['kappa_p50']:.2f}/{out['kappa_p99']:.2f}")
     else:
         print("  rotation ECE (Fisher) / jaw ECE: not in this npz "
               "(no kappa_quaternion / sigma_angle) -- position ECE above is the headline.")

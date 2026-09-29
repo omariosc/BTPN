@@ -347,6 +347,106 @@ def compute_ece(
     }
 
 
+def vmf_rotation_angle_cdf(
+    theta: np.ndarray, kappa: np.ndarray, n_nodes: int = 96
+) -> np.ndarray:
+    """P(rotation angle <= theta) for q ~ vMF(mu, kappa) on S^3.
+
+    The rotation angle between q and mu is theta = 2 * arccos(|mu . q|), in
+    [0, pi]. With s = |mu . q|, the vMF implies the density
+
+        g(s) = 8 pi C_4(kappa) sqrt(1 - s^2) cosh(kappa s),   s in [0, 1],
+
+    with C_4(kappa) = kappa / (4 pi^2 I_1(kappa)). So
+
+        P(theta' <= theta) = integral of g(s) from cos(theta / 2) to 1.
+
+    The integral is evaluated by Gauss-Legendre quadrature after the
+    substitution s = 1 - v^2, which removes the square-root endpoint
+    singularity; all terms are combined in log space so large kappa is stable.
+
+    Args:
+        theta: Rotation angles in radians (...,).
+        kappa: vMF concentrations (...,), same shape as ``theta``.
+        n_nodes: Quadrature nodes.
+
+    Returns:
+        CDF values in [0, 1] (...,).
+    """
+    from scipy.special import i1e
+
+    theta = np.clip(np.asarray(theta, dtype=np.float64), 0.0, np.pi)
+    kappa = np.asarray(kappa, dtype=np.float64)
+    theta, kappa = np.broadcast_arrays(theta, kappa)
+
+    log_c4 = np.log(kappa) - np.log(4.0 * np.pi**2) - (np.log(i1e(kappa)) + kappa)
+    v_max = np.sqrt(1.0 - np.cos(theta / 2.0))  # s = 1 - v^2 runs from 1 down to cos(theta/2)
+
+    nodes, weights = np.polynomial.legendre.leggauss(n_nodes)
+    v = 0.5 * v_max[..., None] * (nodes + 1.0)          # (..., n_nodes) in [0, v_max]
+    w = 0.5 * v_max[..., None] * weights
+    s = 1.0 - v**2
+    k = kappa[..., None]
+    ks = k * s
+    log_cosh = ks + np.log1p(np.exp(-2.0 * ks)) - np.log(2.0)
+    # ds = 2 v dv; sqrt(1 - s^2) = v * sqrt(2 - v^2)
+    log_integrand = (
+        np.log(8.0 * np.pi) + log_c4[..., None] + log_cosh
+        + np.log(2.0) + 2.0 * np.log(np.maximum(v, 1e-300)) + 0.5 * np.log(2.0 - v**2)
+    )
+    cdf = np.sum(w * np.exp(log_integrand), axis=-1)
+    return np.clip(cdf, 0.0, 1.0)
+
+
+def compute_rotation_ece_vmf(
+    angle_errors: np.ndarray,
+    kappas: np.ndarray,
+    n_bins: int = 10,
+) -> dict[str, Any]:
+    """Expected Calibration Error for vMF rotation uncertainty.
+
+    Mirrors :func:`compute_ece` (quantile bins of the predicted uncertainty,
+    68.3 % coverage as the headline level) but uses the exact rotation-angle
+    distribution implied by each kappa via :func:`vmf_rotation_angle_cdf`.
+    An error is "within the level-alpha region" when its predicted CDF value
+    (probability integral transform) is at most alpha.
+
+    Args:
+        angle_errors: (N,) geodesic rotation errors in radians.
+        kappas: (N,) predicted vMF concentrations.
+        n_bins: Number of quantile bins over kappa.
+
+    Returns:
+        Dict with ``ece`` (68.3 % level), ``global_coverages`` for levels
+        0.5 / 0.683 / 0.9 / 0.95 / 0.99, ``n_bins`` and ``n_total``.
+    """
+    errors = np.asarray(angle_errors, dtype=np.float64).ravel()
+    kappas = np.asarray(kappas, dtype=np.float64).ravel()
+    if errors.shape != kappas.shape:
+        raise ValueError(f"Length mismatch: errors {errors.shape} vs kappas {kappas.shape}")
+
+    pit = vmf_rotation_angle_cdf(errors, kappas)
+    levels = [0.5, 0.683, 0.9, 0.95, 0.99]
+
+    edges = np.quantile(kappas, np.linspace(0.0, 1.0, n_bins + 1))
+    total, count = 0.0, 0
+    for i in range(n_bins):
+        lo, hi = edges[i], edges[i + 1]
+        mask = (kappas >= lo) & (kappas <= hi) if i == 0 else (kappas > lo) & (kappas <= hi)
+        n_in = int(mask.sum())
+        if n_in == 0:
+            continue
+        total += abs(float((pit[mask] <= 0.683).mean()) - 0.683) * n_in
+        count += n_in
+
+    return {
+        "ece": float(total / max(count, 1)),
+        "global_coverages": {f"{a:.3f}": float((pit <= a).mean()) for a in levels},
+        "n_bins": n_bins,
+        "n_total": count,
+    }
+
+
 def compute_ause(
     errors: np.ndarray,
     sigmas: np.ndarray,

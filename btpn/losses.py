@@ -192,32 +192,28 @@ def beta_nll_loss(
 
 
 def _vmf_log_normalizer_s3(kappa: torch.Tensor) -> torch.Tensor:
-    """Log normalisation constant C_4(kappa) for VMF on S^3.
+    """Log normalisation constant log C_4(kappa) for the von Mises-Fisher on S^3.
 
-    Uses exact formula for small kappa with a smooth sigmoid transition to
-    the asymptotic approximation for large kappa (> ~10).
+    For p = 4 dimensions, C_p(kappa) = kappa^(p/2 - 1) / ((2 pi)^(p/2) I_(p/2 - 1)(kappa)),
+    so
+
+    .. math::
+
+        \\log C_4(\\kappa) = \\log \\kappa - \\log(4\\pi^2) - \\log I_1(\\kappa)
+
+    where I_1 is the modified Bessel function of the first kind. log I_1 is
+    computed stably as ``log(i1e(kappa)) + kappa`` (i1e is the exponentially
+    scaled Bessel function), which is accurate for small and large kappa alike.
+    As kappa -> 0, C_4 -> 1 / (2 pi^2), the uniform density on S^3.
 
     Args:
-        kappa: Concentration parameter (...,).
+        kappa: Concentration parameter (...,), kappa > 0.
 
     Returns:
         Log normalisation constant (...,).
     """
-    # Asymptotic approximation (large kappa)
-    log_norm_approx = kappa - 2.0 * torch.log(kappa + 1e-6) + math.log(2.0 * math.pi ** 2)
-
-    # Exact formula: C_4(kappa) = kappa^2 / (4 pi^2 sinh(kappa))
-    # log sinh(kappa) = kappa + log(1 - exp(-2 kappa)) - log(2)
-    log_sinh_kappa = kappa + torch.log1p(-torch.exp(-2.0 * kappa)) - math.log(2.0)
-    log_norm_exact = (
-        2.0 * torch.log(kappa + 1e-6)
-        - math.log(4.0 * math.pi ** 2)
-        - log_sinh_kappa
-    )
-
-    # Smooth transition centred at kappa = 10
-    weight = torch.sigmoid((kappa - 10.0) / 2.0)
-    return weight * log_norm_approx + (1.0 - weight) * log_norm_exact
+    log_i1 = torch.log(torch.special.i1e(kappa)) + kappa
+    return torch.log(kappa) - math.log(4.0 * math.pi ** 2) - log_i1
 
 
 # ============================================================================
@@ -234,29 +230,39 @@ def beta_vmf_loss(
     min_kappa: float = 1.0,
     max_kappa: float = 500.0,
 ) -> torch.Tensor:
-    """Beta-weighted Von Mises-Fisher loss for quaternion uncertainty on S^3.
+    """Beta-weighted von Mises-Fisher NLL for quaternion rotations on S^3.
 
-    Applies beta-weighting to prevent kappa collapse, analogous to sigma
-    collapse in Gaussian NLL:
+    Quaternions q and -q encode the same rotation, so the likelihood is the
+    antipodally symmetric vMF
 
     .. math::
 
-        L = \\kappa_d^{\\beta} (-|\\mu \\cdot y|)
-          + \\kappa_d^{1 - \\beta} \\log C_4(\\kappa)
+        p(q \\mid \\mu, \\kappa) = C_4(\\kappa) \\cosh(\\kappa \\, \\mu \\cdot q),
 
-    where ``kappa_d`` is the detached (stop-gradient) concentration.
+    which is exactly normalised (the odd part of exp(kappa mu.q) integrates to
+    zero over S^3). The negative log-likelihood is
+
+    .. math::
+
+        \\mathrm{NLL} = -\\log\\cosh(\\kappa |\\mu \\cdot q|) - \\log C_4(\\kappa).
+
+    Following beta-NLL (Seitzer et al., 2022), each sample is weighted by the
+    stop-gradient variance raised to ``beta``. Rotational variance scales as
+    1 / kappa, so the weight is ``stopgrad(kappa) ** -beta``. ``beta = 0``
+    recovers the plain NLL; the weight never changes where the optimum lies
+    for a given sample, only how much each sample counts.
 
     Args:
         mu_quat: Predicted mean quaternion (..., 4).
         kappa: Predicted concentration (..., 1) or (...,).
         target_quat: Target quaternion (..., 4).
-        beta: Beta parameter.
+        beta: Beta-NLL exponent in [0, 1].
         reduction: ``"mean"`` | ``"sum"`` | ``"none"``.
         min_kappa: Lower kappa clamp.
         max_kappa: Upper kappa clamp.
 
     Returns:
-        Beta-VMF loss.
+        Beta-weighted vMF NLL.
     """
     mu_quat = normalize_quaternion(mu_quat)
     target_quat = normalize_quaternion(target_quat)
@@ -265,13 +271,11 @@ def beta_vmf_loss(
     kappa = torch.clamp(kappa, min=min_kappa, max=max_kappa)
 
     dot = torch.abs(torch.sum(mu_quat * target_quat, dim=-1))
-    log_norm = _vmf_log_normalizer_s3(kappa)
+    kd = kappa * dot
+    log_cosh = kd + torch.log1p(torch.exp(-2.0 * kd)) - math.log(2.0)
+    nll = -log_cosh - _vmf_log_normalizer_s3(kappa)
 
-    kappa_d = kappa.detach()
-    error_term = (kappa_d ** beta) * (-dot)
-    norm_term = (kappa_d ** (1 - beta)) * log_norm
-
-    loss = error_term + norm_term
+    loss = kappa.detach() ** (-beta) * nll
 
     if reduction == "mean":
         return loss.mean()
