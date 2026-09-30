@@ -2,7 +2,7 @@
 
 # Bayesian Temporal Pose Networks
 
-### Uncertainty-Calibrated Laparoscopic Tool Pose Tracking
+### Uncertainty-Aware Laparoscopic Tool Pose Tracking
 
 [![MICCAI 2026](https://img.shields.io/badge/MICCAI-2026-blue)](#citation)
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](LICENSE)
@@ -11,7 +11,7 @@
 
 <!-- **[Paper](link) | [Poster](link) | [Video](link)** -->
 
-*A probabilistic framework for 7-DoF vision-only laparoscopic tool pose tracking with calibrated Bayesian uncertainty, validated on 114 peg transfer trials across three electromagnetic tracking datasets.*
+*A probabilistic framework for 7-DoF visual-kinematic laparoscopic tool pose tracking with Bayesian uncertainty estimates, evaluated on 114 peg transfer trials across three electromagnetic tracking datasets.*
 
 </div>
 
@@ -31,17 +31,17 @@
 
 ## Abstract
 
-Accurate pose tracking of laparoscopic instruments from monocular endoscopic video in surgical training tasks is essential for computer-assisted surgery and objective skill assessment. However, current methods require geometric priors unavailable in non-robotic settings and lack temporal reasoning across multimodal cues and uncertainty quantification. We introduce **Bayesian Temporal Pose Network (BTPN)**, a framework that fuses visual and kinematic features through hierarchical multi-scale temporal attention with calibrated Bayesian uncertainty. A fine-tuned segmentation backbone achieves **91.1% mAP<sub>50-95</sub>** and keypoint detection reaches **94.6% mAP<sub>50-95</sub>**. End-to-end visual pose tracking attains **7.0 mm** position error and **11.7°** rotation (geodesic) with a position calibration error of **0.028** (ECE). The framework is validated on three electromagnetic tracking datasets with 114 peg transfer trials, demonstrating that uncertainty-aware, vision-only tracking can support interpretable surgical skill assessment.
+Accurate pose tracking of laparoscopic instruments from monocular endoscopic video in surgical training tasks is essential for computer-assisted surgery and objective skill assessment. However, current methods require geometric priors unavailable in non-robotic settings and lack temporal reasoning across multimodal cues and uncertainty quantification. We introduce **Bayesian Temporal Pose Network (BTPN)**, a framework that fuses visual and kinematic features through hierarchical multi-scale temporal attention with Bayesian uncertainty estimates. A fine-tuned segmentation backbone achieves **91.1% mAP<sub>50-95</sub>** and keypoint detection reaches **94.6% mAP<sub>50-95</sub>**. The retrained visual-kinematic model attains **9.0 mm** position error and **8.9°** rotation (geodesic) with a position calibration error of **0.238** (ECE). The framework is evaluated on three electromagnetic tracking datasets with 114 peg transfer trials, supporting interpretable surgical skill assessment.
 
 ## Highlights
 
 | | Metric | Value |
 |---|---|---|
-| :dart: | **Position RMSE** | 7.0 mm on held-out surgical trials |
-| :triangular_ruler: | **Rotation (geodesic)** | 11.7° on SO(3) |
+| :dart: | **Position RMSE** | 9.0 mm on held-out surgical trials |
+| :triangular_ruler: | **Rotation (geodesic)** | 8.9° on SO(3) |
 | :microscope: | **Segmentation** | 91.1% mAP<sub>50-95</sub> |
 | :straight_ruler: | **Keypoints** | 94.6% mAP<sub>50-95</sub> |
-| :bar_chart: | **Calibration (ECE)** | 0.028 position — well-calibrated uncertainty |
+| :bar_chart: | **Calibration (ECE)** | 0.238 position; 0.255 rotation (Fisher) |
 | :hospital: | **Validation** | 114 peg transfer trials across 3 datasets |
 
 ---
@@ -60,26 +60,29 @@ Accurate pose tracking of laparoscopic instruments from monocular endoscopic vid
 
 ### (b) Pose Prediction — Dataset A Held-Out Trials
 
-| Method | Pos *x* | Pos *y* | Pos *z* | Pos ‖v‖ | Roll | Pitch | Yaw | Geo | Jaw (% open) | ECE |
-|:-------|:-------:|:-------:|:-------:|:--------:|:----:|:-----:|:---:|:---:|:-------:|:---:|
-| ART-Net | 19.7 | 20.7 | 14.9 | 32.2 | 65.6 | 30.7 | 67.5 | 55.4 | 42.5 | 0.155 |
-| Visual regr. | 18.3 | 17.0 | 13.0 | 28.1 | 52.8 | 27.2 | 55.0 | 44.0 | 45.6 | 0.137 |
-| Visual + LSTM | 17.1 | 13.2 | 12.3 | 24.9 | 76.8 | 36.8 | 68.0 | 67.9 | 43.2 | 0.098 |
-| Visual + TCN | 15.1 | 11.9 | 11.0 | 22.1 | 72.0 | 37.3 | 68.6 | 66.4 | 41.9 | 0.240 |
-| Visual + VTT | 16.4 | 13.7 | 12.5 | 24.7 | 74.0 | 45.6 | 79.7 | 69.0 | 42.2 | 0.115 |
-| Kinematic regr. | 5.2 | 5.8 | 3.9 | 8.7 | 33.1 | 17.2 | 31.2 | 27.6 | 14.4 | 0.098 |
-| BTPN w/o multiscale | 4.3 | 4.7 | 3.6 | 7.3 | 18.0 | 7.4 | 19.0 | 11.6 | 13.2 | 0.020 |
-| **Full BTPN** | **4.2** | **4.4** | **3.4** | **7.0** | **14.4** | **7.3** | **15.6** | **11.7** | **13.6** | **0.028** |
+| Method | Pos *x* | Pos *y* | Pos *z* | Pos ‖v‖ | Roll | Pitch | Yaw | Geo | Jaw (% open) | Pos ECE | Rot ECE |
+|:-------|:-------:|:-------:|:-------:|:--------:|:----:|:-----:|:---:|:---:|:-------:|:-------:|:-------:|
+| ART-Net | 19.7 | 20.7 | 14.9 | 32.2 | 65.6 | 30.7 | 67.5 | 55.4 | 42.5 | 0.155 | — |
+| Visual regr. | 18.3 | 17.0 | 13.0 | 28.1 | 52.8 | 27.2 | 55.0 | 44.0 | 45.6 | 0.137 | — |
+| Visual + LSTM | 17.1 | 13.2 | 12.3 | 24.9 | 76.8 | 36.8 | 68.0 | 67.9 | 43.2 | 0.098 | — |
+| Visual + TCN | 15.1 | 11.9 | 11.0 | 22.1 | 72.0 | 37.3 | 68.6 | 66.4 | 41.9 | 0.240 | — |
+| Visual + VTT | 16.4 | 13.7 | 12.5 | 24.7 | 74.0 | 45.6 | 79.7 | 69.0 | 42.2 | 0.115 | — |
+| Kinematic regr. | 5.2 | 5.8 | 3.9 | 8.7 | 33.1 | 17.2 | 31.2 | 27.6 | 14.4 | 0.098 | — |
+| BTPN w/o multiscale | 4.3 | 4.7 | 3.6 | 7.3 | 18.0 | 7.4 | 19.0 | 11.6 | 13.2 | 0.020 | — |
+| Full BTPN (paper) | 4.2 | 4.4 | 3.4 | 7.0 | 14.4 | 7.3 | 15.6 | 11.7 | 13.6 | 0.028 | 0.301 |
+| **Full BTPN (retrained)** | **5.3** | **5.9** | **4.1** | **9.0** | **13.7** | **5.1** | **14.1** | **8.9** | **14.7** | **0.238** | **0.255** |
 
-> Position errors in mm, rotation errors in degrees. Geo = geodesic distance on SO(3). Jaw is reported as **% of the per-trial 10/90-percentile opening range** (the jaw signal is a raw sensor voltage with no voltage-to-angle calibration). ECE is the position calibration error (L2, mm); the Full-BTPN ECE cell (**0.028**) is the value reproduced by `python scripts/evaluate.py --from-npz results/evaluation_data.npz`. The *w/o multiscale* row is the genuine single-scale-[10] kinematic prior and is reproducible from `python scripts/evaluate.py --from-npz results/evaluation_data_no_multiscale.npz`. The full ablation set (incl. *w/o kinematic prior / bimanual / calibration*) is in [`results/table2b.tex`](results/table2b.tex).
+> Position errors in mm, rotation errors in degrees. Geo = geodesic distance on SO(3). Jaw is reported as **% of the per-trial 10/90-percentile opening range** (the jaw signal is a raw sensor voltage with no voltage-to-angle calibration). Pos ECE is the position calibration error (L2, mm); Rot ECE is the Fisher rotation calibration error. The paper and retrained rows can be reproduced with `python scripts/evaluate.py --from-npz results/evaluation_data.npz` and `python scripts/evaluate.py --from-npz results/evaluation_data_vmf_fix.npz`, respectively. The *w/o multiscale* row is reproducible from `python scripts/evaluate.py --from-npz results/evaluation_data_no_multiscale.npz`. The full ablation set is in [`results/table2b.tex`](results/table2b.tex).
 >
-> Multi-scale primarily benefits **position** (7.0 vs 7.3 mm ‖v‖; ~0.3 mm, 18/20 held-out trials, above the run-to-run noise floor); rotation/jaw/ECE are unchanged-to-slightly-better without it. The benefit is a broadly-distributed refinement, not localized to specific motion regimes.
+> *A minor evaluation bug affected the original paper results; the retrained row and evaluation code use the corrected calculation.*
+>
+> In the paper checkpoint, multi-scale primarily benefits **position** (7.0 vs 7.3 mm ‖v‖; ~0.3 mm, 18/20 held-out trials, above the run-to-run noise floor); rotation/jaw/ECE are unchanged-to-slightly-better without it. The benefit is a broadly-distributed refinement, not localized to specific motion regimes.
 
-### (c) Cross-Dataset Generalisation
+### (c) Cross-Dataset Generalisation (paper checkpoint)
 
 | Dataset | Role | Pos *x* | Pos *y* | Pos *z* | Pos ‖v‖ | &Delta;Rot (°/step) | Jaw (% open) |
 |:--------|:----:|:-------:|:-------:|:-------:|:--------:|:-------------------:|:-------:|
-| A (21 trials) | Held-out | 4.2 | 4.4 | 3.4 | 7.0 | 17.6 | 13.6 |
+| A (20 trials) | Held-out | 4.2 | 4.4 | 3.4 | 7.0 | 17.6 | 13.6 |
 | B (30 trials) | In-dist. | 5.6 | 5.0 | 4.2 | 8.6 | 28.9 | 11.6 |
 | C (24 trials) | OOD | 4.9 | 7.1 | 6.8 | 11.0 | 29.1 | N/A |
 
@@ -109,7 +112,7 @@ Accuracy is preserved within single-seed noise while latency drops ~40–49% (De
   <img src="figures/uncertainty_quality.png" alt="Uncertainty Quality Assessment" width="90%"/>
 </p>
 
-**Uncertainty quality assessment.** **(a)** Reliability diagram: position (ECE = 0.028) and jaw (ECE = 0.079) are well-calibrated, while rotation is over-conservative / under-confident (ECE = 0.301, i.e. its ±&sigma; intervals cover more than the nominal rate), reflecting the inherent difficulty of recovering orientation from monocular images. **(b)** Mean position error binned by predicted &sigma; (*r* = 0.60): a clear monotonic trend confirms higher predicted uncertainty corresponds to higher actual error. **(c)** Sparsification curve: discarding the most uncertain 50% of predictions reduces mean error from 5.5 mm to ~4.6 mm (AUSE = 0.95 mm), close to the oracle ordering by true error. **(d)** Position error stratified by detection confidence — error is 5.3 mm at high confidence (*n* = 20,258) and degrades to 22.2 mm only for rare low-confidence frames (*n* = 121). This figure is reproduced by `python scripts/make_uncertainty_figure.py`.
+**Uncertainty quality assessment (paper checkpoint).** **(a)** Reliability diagram: position (ECE = 0.028) and jaw (ECE = 0.079) are well-calibrated, while rotation is over-conservative / under-confident (ECE = 0.301, i.e. its ±&sigma; intervals cover more than the nominal rate), reflecting the inherent difficulty of recovering orientation from monocular images. **(b)** Mean position error binned by predicted &sigma; (*r* = 0.60): a clear monotonic trend confirms higher predicted uncertainty corresponds to higher actual error. **(c)** Sparsification curve: discarding the most uncertain 50% of predictions reduces mean error from 5.5 mm to ~4.6 mm (AUSE = 0.95 mm), close to the oracle ordering by true error. **(d)** Position error stratified by detection confidence — error is 5.3 mm at high confidence (*n* = 20,258) and degrades to 22.2 mm only for rare low-confidence frames (*n* = 121). This figure is reproduced by `python scripts/make_uncertainty_figure.py`.
 
 ### Datasets
 
@@ -217,20 +220,21 @@ python scripts/train.py --stage detection --task keypoints --config configs/dete
 ### Evaluation
 
 There are **two** evaluation entry points. Use **(A)** to reproduce the
-headline Dataset-A numbers on any machine; use **(B)** for the full,
+Dataset-A table rows on any machine; use **(B)** for the full,
 from-scratch evaluation once the datasets are available.
 
 **(A) Offline reproduction — CPU-only, no GPU, no full dataset.**
 Recomputes the **Full BTPN / Dataset A** pose and calibration metrics directly
-from the committed predictions in `results/evaluation_data.npz`. This is the
-command that reproduces the headline row of [Key Results (b)](#b-pose-prediction--dataset-a-held-out-trials):
+from the committed predictions. These commands reproduce the paper and retrained
+rows of [Key Results (b)](#b-pose-prediction--dataset-a-held-out-trials):
 
 ```bash
 python scripts/evaluate.py --from-npz results/evaluation_data.npz
+python scripts/evaluate.py --from-npz results/evaluation_data_vmf_fix.npz
 ```
 
-It prints a side-by-side table of *reproduced vs paper* values and writes
-`results/table2b_reproduced.tex` and `results/evaluation_reproduced.json`.
+Each command prints a side-by-side comparison with its table row and writes
+reproduced LaTeX and JSON metrics under `results/`.
 See [Reproducing the results table](#reproducing-the-results-table) for the
 exact numbers this emits.
 
@@ -269,7 +273,7 @@ python scripts/generate_figures.py --data results/evaluation_data.npz --all --ou
 
 ### Reproducing the results table
 
-Command **(A)** recomputes the **Full BTPN / Dataset A** row of
+Command **(A)** recomputes the **Full BTPN (paper) / Dataset A** row of
 [Key Results (b)](#b-pose-prediction--dataset-a-held-out-trials) directly from
 `results/evaluation_data.npz` and prints the npz-recomputed value next to the
 committed table value for every metric, with a within-tolerance verdict:

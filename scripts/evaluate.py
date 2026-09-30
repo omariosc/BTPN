@@ -540,6 +540,20 @@ def _denormalize_positions(
     return pred * std + mean, target * std + mean, sigma * std
 
 
+def _physical_target_quaternions(
+    target: np.ndarray,
+    mean: np.ndarray,
+    std: np.ndarray,
+) -> np.ndarray:
+    """Map standardized target quaternions to physical unit quaternions."""
+    physical = np.empty_like(target, dtype=np.float64)
+    for tool_idx, channel_slice in enumerate((slice(3, 7), slice(11, 15))):
+        physical[:, tool_idx] = (
+            target[:, tool_idx] * std[channel_slice] + mean[channel_slice]
+        )
+    return _normalize_quaternions(physical)
+
+
 def compute_per_tool_metrics(
     pred_data: dict[str, np.ndarray],
     norm_stats: NormalizationStats,
@@ -560,6 +574,9 @@ def compute_per_tool_metrics(
     """
     metrics: dict[str, Any] = {}
     is_6dof = dataset_key == "C"
+    target_quat = _physical_target_quaternions(
+        pred_data["target_quaternion"], norm_stats.mean, norm_stats.std,
+    )
 
     # ---- Position metrics per tool ----
     tool_pos_errors: list[np.ndarray] = []
@@ -619,14 +636,14 @@ def compute_per_tool_metrics(
     for t in range(2):
         rot_m = compute_geodesic_error(
             pred_data["mu_quaternion"][:, t, :],
-            pred_data["target_quaternion"][:, t, :],
+            target_quat[:, t, :],
         )
         tool_rot_metrics.append(rot_m)
 
         # Raw errors for AUSE
         from btpn.metrics import _normalize_quaternions
         q1 = _normalize_quaternions(pred_data["mu_quaternion"][:, t, :])
-        q2 = _normalize_quaternions(pred_data["target_quaternion"][:, t, :])
+        q2 = target_quat[:, t, :]
         dot = np.abs(np.sum(q1 * q2, axis=-1))
         dot = np.clip(dot, 0.0, 1.0)
         geo_err = 2.0 * np.arccos(dot) * 180.0 / np.pi
@@ -654,7 +671,7 @@ def compute_per_tool_metrics(
     for t in range(2):
         euler_m = compute_euler_errors(
             pred_data["mu_quaternion"][:, t, :],
-            pred_data["target_quaternion"][:, t, :],
+            target_quat[:, t, :],
         )
         for axis_name, axis_m in euler_m.items():
             if axis_name not in euler_metrics:
@@ -702,6 +719,9 @@ def compute_per_tool_metrics(
     rot_sigma_proxy = 1.0 / (kappa_all + 1e-8)
     rot_ause = compute_ause(all_rot, rot_sigma_proxy, n_steps=20)
     rot_ece_vmf = compute_rotation_ece_vmf(np.radians(all_rot), kappa_all)
+    rot_ece_fisher = compute_ece(
+        np.radians(all_rot), 1.0 / np.sqrt(np.maximum(kappa_all, 1.0)),
+    )
 
     metrics["uncertainty"] = {
         "ece": ece_result["ece"],
@@ -712,6 +732,8 @@ def compute_per_tool_metrics(
         "mean_kappa": float(kappa_all.mean()),
         "rot_ece_vmf": rot_ece_vmf["ece"],
         "rot_coverages_vmf": rot_ece_vmf["global_coverages"],
+        "rot_ece_fisher": rot_ece_fisher["ece"],
+        "rot_coverages_fisher": rot_ece_fisher["global_coverages"],
         "global_coverages": ece_result["global_coverages"],
         "coverage": coverage_result,
     }
@@ -1173,6 +1195,10 @@ def evaluate(
         for k, v in pred_data.items():
             if isinstance(v, np.ndarray):
                 save_arrays[k] = v
+        if "trial_idx" in save_arrays:
+            save_arrays["trial_ids"] = save_arrays["trial_idx"]
+        save_arrays["mean"] = norm_stats.mean
+        save_arrays["std"] = norm_stats.std
         # Add denormalized errors
         raw = all_results[ds_key].get("_raw", {})
         for k, v in raw.items():
@@ -1264,6 +1290,12 @@ _TABLE_FULL_BTPN: dict[str, float] = {
     "jaw_pct": 13.6, "ece": 0.028,
 }
 
+_TABLE_VMF_FIX: dict[str, float] = {
+    "pos_x": 5.3, "pos_y": 5.9, "pos_z": 4.1, "pos_v": 9.0,
+    "roll": 13.7, "pitch": 5.1, "yaw": 14.1, "geo": 8.9,
+    "jaw_pct": 14.7, "ece": 0.238,
+}
+
 # Committed Table 2(b) "w/o multiscale" row: the genuine single-scale-[10]
 # kinematic prior (results/all_results.json, no_multiscale; predictions in
 # results/evaluation_data_no_multiscale.npz). Reproduced from that npz via
@@ -1279,9 +1311,11 @@ _TABLE_NO_MULTISCALE: dict[str, float] = {
 def _select_committed_row(npz_path: Path) -> tuple[dict[str, float], str]:
     """Pick the committed table row to compare against, from the npz filename.
 
-    ``evaluation_data_no_multiscale.npz`` -> the w/o-multiscale row; anything
-    else -> the Full-BTPN row. Returns (row dict, human label).
+    Recognizes the retrained and single-scale files; other files use the
+    Full-BTPN row. Returns (row dict, human label).
     """
+    if "vmf_fix" in npz_path.name.lower():
+        return _TABLE_VMF_FIX, "Full BTPN (retrained)"
     if "no_multiscale" in npz_path.name.lower():
         return _TABLE_NO_MULTISCALE, "BTPN w/o multiscale"
     return _TABLE_FULL_BTPN, "Full BTPN"
@@ -1369,7 +1403,7 @@ def evaluate_from_npz(
     committed, row_label = _select_committed_row(npz_path)
 
     print("=" * 72)
-    print("  BTPN Offline Reproduction (from released predictions .npz)")
+    print("  BTPN Offline Reproduction (from saved predictions .npz)")
     print("=" * 72)
     print(f"  Predictions:  {npz_path}")
     print(f"  Row:          {row_label}")
@@ -1410,11 +1444,7 @@ def evaluate_from_npz(
     # Targets are stored z-scored (quaternion norm != 1); reverse per tool
     # (T1 idx 3:7, T2 idx 11:15) and re-project to S^3 before any rotation error.
     tgt_pos = [_denorm(data["target_position"][:, t], pos_sl[t]) for t in range(2)]
-    quat_sl = (slice(3, 7), slice(11, 15))
-    tgt_quat = np.zeros_like(data["target_quaternion"])
-    for t in range(2):
-        tgt_quat[:, t] = data["target_quaternion"][:, t] * std[quat_sl[t]] + mean[quat_sl[t]]
-    tgt_quat = _normalize_quaternions(tgt_quat)
+    tgt_quat = _physical_target_quaternions(data["target_quaternion"], mean, std)
 
     # --- positions (mm) ---
     pred_pos = [_denorm(data["mu_position"][:, t], pos_sl[t]) for t in range(2)]
@@ -1521,8 +1551,12 @@ def evaluate_from_npz(
     # npzs write a suffixed copy so they never clobber the headline reproduction.
     output_dir.mkdir(parents=True, exist_ok=True)
     is_full = committed is _TABLE_FULL_BTPN
-    suffix = "" if is_full else "_no_multiscale"
-    row_tex_label = "\\textbf{Full BTPN}" if is_full else "\\quad w/o multiscale"
+    is_retrained = committed is _TABLE_VMF_FIX
+    suffix = "_vmf_fix" if is_retrained else ("" if is_full else "_no_multiscale")
+    row_tex_label = (
+        "\\textbf{Full BTPN (retrained)}" if is_retrained else
+        ("\\textbf{Full BTPN}" if is_full else "\\quad w/o multiscale")
+    )
     tex_path = output_dir / f"table2b_reproduced{suffix}.tex"
     row = (
         f"{row_tex_label} & "
@@ -1537,7 +1571,10 @@ def evaluate_from_npz(
         + row + "\n",
         encoding="utf-8",
     )
-    json_key = "full_btpn_dataset_a" if is_full else "no_multiscale_dataset_a"
+    json_key = (
+        "full_btpn_vmf_fix_dataset_a" if is_retrained else
+        ("full_btpn_dataset_a" if is_full else "no_multiscale_dataset_a")
+    )
     json_path = output_dir / f"evaluation_reproduced{suffix}.json"
     with open(json_path, "w") as f:
         json.dump({json_key: out, "committed_table": committed}, f, indent=2)
@@ -1581,7 +1618,8 @@ def main() -> None:
         help=(
             "Offline reproduction: recompute Dataset A pose + calibration "
             "metrics directly from a saved predictions .npz. Use "
-            "results/evaluation_data.npz for the Full-BTPN row or "
+            "results/evaluation_data.npz for the paper row, "
+            "results/evaluation_data_vmf_fix.npz for the retrained row, or "
             "results/evaluation_data_no_multiscale.npz for the w/o-multiscale "
             "ablation row (the committed row to compare against is inferred "
             "from the filename). Runs on CPU with NO model checkpoint and NO "

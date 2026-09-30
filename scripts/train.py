@@ -1127,7 +1127,7 @@ def train_supervised(config: BTPNConfig, args: argparse.Namespace) -> None:
     # -- Data --
     paths_config = _load_paths_config(args)
     train_loader, val_loader, norm_stats = create_dataloaders(
-        config.__dict__, paths_config,
+        {**config.__dict__, "use_visual_features": True}, paths_config,
     )
     norm_stats.save(ckpt_dir / "norm_stats.npz")
 

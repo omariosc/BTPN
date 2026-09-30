@@ -814,6 +814,7 @@ def collate_visual_temporal(
         "depth_windows": [],
         "visual_valid_mask": [],
         "detection_conf": [],
+        "trial_idx": torch.tensor([s["trial_idx"] for s in batch]),
         "target_position": torch.stack([s["target_position"] for s in batch]),
         "target_quaternion": torch.stack([s["target_quaternion"] for s in batch]),
         "target_angle": torch.stack([s["target_angle"] for s in batch]),
@@ -1215,8 +1216,8 @@ class VisualTemporalDataset(Dataset):
             self._trials_normalized.append(trial_copy)
 
         # Build dense sample list
-        self.samples: list[tuple[dict[str, Any], int, int]] = []
-        for trial in self._trials_normalized:
+        self.samples: list[tuple[int, dict[str, Any], int, int]] = []
+        for trial_idx, trial in enumerate(self._trials_normalized):
             data = trial["data_norm"]
             n_frames = len(data)
             valid_indices = trial.get(
@@ -1228,7 +1229,7 @@ class VisualTemporalDataset(Dataset):
                     if kin_idx < len(valid_indices)
                     else kin_idx
                 )
-                self.samples.append((trial, kin_idx, file_idx))
+                self.samples.append((trial_idx, trial, kin_idx, file_idx))
 
         print(
             f"  Samples: {len(self.samples):,} "
@@ -1256,7 +1257,7 @@ class VisualTemporalDataset(Dataset):
                 - Optionally ``pose_kp_windows``, ``pose_backbone_windows``,
                   ``pose_geometric_windows``, ``pose_conf``.
         """
-        trial, center_idx, center_file_idx = self.samples[idx]
+        trial_idx, trial, center_idx, center_file_idx = self.samples[idx]
         data_norm = trial["data_norm"]
         path_key = str(trial["path"])
         cache = self._cache[path_key]
@@ -1400,6 +1401,7 @@ class VisualTemporalDataset(Dataset):
 
         # Build result
         result: dict[str, Any] = {
+            "trial_idx": trial_idx,
             "kinematic_windows": [
                 torch.from_numpy(w).float() for w in kinematic_windows
             ],
